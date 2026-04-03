@@ -1,0 +1,16 @@
+# PyInstaller build artifacts
+build/
+__pycache__/
+*.spec
+
+# Python cache
+*.pyc
+*.pyo
+
+# ffmpeg binaries (grandes — no rastrear con git normal, solo el exe final via LFS)
+ffmpeg.exe
+ffprobe.exe
+
+# Entornos virtuales
+venv/
+.env/
