@@ -1,146 +1,192 @@
+"""
+Higgs Video Downloader — Dashboard
+Copyright (c) 2026 Jose Alexis Correa Valencia — Freeware de uso irrestricto
+"""
+
 import sys
 import os
-import threading
 import urllib.request
 
 import yt_dlp
-from PyQt6.QtCore import (
-    Qt, QThread, pyqtSignal, QTimer, QSize, QPropertyAnimation,
-    QEasingCurve, QObject
-)
-from PyQt6.QtGui import (
-    QFont, QPixmap, QColor, QPalette, QIcon, QCursor, QPainter,
-    QLinearGradient, QBrush
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QSize, QPoint
+from PyQt6.QtGui  import (
+    QFont, QPixmap, QColor, QPalette, QCursor,
+    QPainter, QBrush, QLinearGradient, QPen
 )
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QLineEdit, QPushButton, QComboBox, QProgressBar,
     QFileDialog, QFrame, QSizePolicy, QGraphicsDropShadowEffect,
-    QScrollArea
+    QStackedWidget, QScrollArea, QSpacerItem, QAbstractItemView
 )
 
 
-# ─── ffmpeg auto-detect ───────────────────────────────────────────────────────
+# ── ffmpeg ────────────────────────────────────────────────────────────────────
 
 def _find_ffmpeg():
     if getattr(sys, "frozen", False):
         candidates = [sys._MEIPASS, os.path.dirname(sys.executable)]
     else:
         candidates = [os.path.dirname(os.path.abspath(__file__))]
-    for path in candidates:
-        if os.path.isfile(os.path.join(path, "ffmpeg.exe")):
-            return path
+    for p in candidates:
+        if os.path.isfile(os.path.join(p, "ffmpeg.exe")):
+            return p
     return None
 
 FFMPEG_DIR = _find_ffmpeg()
 
 
-# ─── Colores / tema ───────────────────────────────────────────────────────────
+def default_video_dir():
+    v = os.path.expanduser("~/Videos")
+    return v if os.path.isdir(v) else os.path.expanduser("~/Downloads")
 
-C = {
-    "bg":        "#0d0d1a",
-    "surface":   "#12122a",
-    "card":      "#1a1a35",
-    "border":    "#2a2a4a",
-    "accent":    "#e94560",
-    "accent2":   "#ff6b81",
-    "text":      "#f0f0f0",
-    "muted":     "#8080a0",
-    "success":   "#4caf50",
-    "warning":   "#ff9800",
-    "input_bg":  "#1e1e3a",
+
+# ── Paleta ────────────────────────────────────────────────────────────────────
+
+BG      = "#08080f"
+SIDEBAR = "#0d0d1a"
+SURFACE = "#111120"
+CARD    = "#171728"
+BORDER  = "#22223a"
+TEXT    = "#ececf4"
+MUTED   = "#606080"
+SUCCESS = "#4caf50"
+WARNING = "#ff9800"
+INPUT   = "#1a1a2d"
+
+# Acento por plataforma
+ACCENT = {
+    "youtube": {"primary": "#e94560", "secondary": "#ff6b35"},
+    "tiktok":  {"primary": "#69c9d0", "secondary": "#ee1d52"},
 }
 
 
-# ─── Workers ──────────────────────────────────────────────────────────────────
+# ── Configuración de plataformas ──────────────────────────────────────────────
+
+PLATFORMS = {
+    "youtube": {
+        "label":    "YouTube",
+        "icon":     "▶",
+        "hint":     "Pega un enlace de YouTube…",
+        "formats": [
+            ("Mejor calidad  (video + audio)",
+             "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best"),
+            ("1080p  (video + audio)",
+             "bestvideo[ext=mp4][height<=1080]+bestaudio[ext=m4a]/bestvideo[height<=1080]+bestaudio/best[height<=1080]"),
+            ("720p  (video + audio)",
+             "bestvideo[ext=mp4][height<=720]+bestaudio[ext=m4a]/bestvideo[height<=720]+bestaudio/best[height<=720]"),
+            ("480p  (video + audio)",
+             "bestvideo[ext=mp4][height<=480]+bestaudio[ext=m4a]/bestvideo[height<=480]+bestaudio/best[height<=480]"),
+            ("360p  (video + audio)",
+             "bestvideo[ext=mp4][height<=360]+bestaudio[ext=m4a]/bestvideo[height<=360]+bestaudio/best[height<=360]"),
+            ("Solo audio  (MP3 192 kbps)", "bestaudio/best"),
+        ],
+        "extractor_args": {},
+    },
+    "tiktok": {
+        "label":    "TikTok",
+        "icon":     "♪",
+        "hint":     "Pega un enlace de TikTok…",
+        "formats": [
+            ("Alta calidad  (sin marca de agua)",
+             "best[format_id!*=watermark][ext=mp4]/best[format_id!*=watermark]/best[ext=mp4]/best"),
+            ("Solo audio  (MP3 192 kbps)", "bestaudio/best"),
+        ],
+        "extractor_args": {
+            "tiktok": {"api_hostname": "api22-normal-c-useast2a.tiktokv.com"}
+        },
+    },
+}
+
+
+# ── Workers ───────────────────────────────────────────────────────────────────
 
 class InfoWorker(QThread):
-    """Obtiene metadatos + thumbnail en un hilo separado."""
-    ready   = pyqtSignal(dict)
-    failed  = pyqtSignal(str)
+    ready  = pyqtSignal(dict)
+    failed = pyqtSignal(str)
 
-    def __init__(self, url):
+    def __init__(self, url, extractor_args=None):
         super().__init__()
-        self.url = url
+        self.url             = url
+        self.extractor_args  = extractor_args or {}
 
     def run(self):
         try:
-            opts = {"quiet": True, "no_warnings": True, "skip_download": True}
+            opts = {
+                "quiet": True, "no_warnings": True, "skip_download": True,
+                "extractor_args": self.extractor_args,
+            }
             with yt_dlp.YoutubeDL(opts) as ydl:
                 info = ydl.extract_info(self.url, download=False)
 
-            thumbnail_data = None
-            thumb_url = info.get("thumbnail") or ""
-            if thumb_url:
-                try:
-                    req = urllib.request.Request(
-                        thumb_url,
-                        headers={"User-Agent": "Mozilla/5.0"}
-                    )
-                    with urllib.request.urlopen(req, timeout=8) as r:
-                        thumbnail_data = r.read()
-                except Exception:
-                    pass
+            thumb = None
+            for key in ("thumbnail", "thumbnails"):
+                url = info.get(key)
+                if isinstance(url, list) and url:
+                    url = sorted(url, key=lambda t: t.get("width", 0), reverse=True)[0].get("url", "")
+                if url and isinstance(url, str):
+                    try:
+                        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+                        with urllib.request.urlopen(req, timeout=8) as r:
+                            thumb = r.read()
+                        break
+                    except Exception:
+                        pass
 
             self.ready.emit({
-                "title":     info.get("title", "Sin título"),
-                "channel":   info.get("uploader") or info.get("channel", "—"),
-                "duration":  info.get("duration", 0),
-                "view_count": info.get("view_count", 0),
-                "thumbnail": thumbnail_data,
+                "title":      info.get("title") or info.get("description", "")[:80] or "Sin título",
+                "channel":    info.get("uploader") or info.get("creator") or info.get("channel") or "—",
+                "duration":   info.get("duration", 0) or 0,
+                "view_count": info.get("view_count") or info.get("repost_count") or 0,
+                "like_count": info.get("like_count") or 0,
+                "thumbnail":  thumb,
+                "platform":   info.get("extractor_key", "").lower(),
             })
         except Exception as e:
             self.failed.emit(str(e))
 
 
 class DownloadWorker(QThread):
-    """Ejecuta la descarga y emite señales de progreso."""
-    progress = pyqtSignal(float, str)   # pct, status_text
-    finished = pyqtSignal(str)          # ruta destino
+    progress = pyqtSignal(float, str)
+    finished = pyqtSignal(str)
     error    = pyqtSignal(str)
 
-    def __init__(self, url, fmt_string, out_dir, ffmpeg_dir):
+    def __init__(self, url, fmt, out_dir, ffmpeg_dir, extractor_args=None):
         super().__init__()
-        self.url        = url
-        self.fmt_string = fmt_string
-        self.out_dir    = out_dir
-        self.ffmpeg_dir = ffmpeg_dir
-        self._phase     = 1   # 1 = video, 2 = audio
+        self.url            = url
+        self.fmt            = fmt
+        self.out_dir        = out_dir
+        self.ffmpeg_dir     = ffmpeg_dir
+        self.extractor_args = extractor_args or {}
+        self._phase         = 1
 
     def _hook(self, d):
         if d["status"] == "downloading":
-            total     = d.get("total_bytes") or d.get("total_bytes_estimate", 0)
-            done      = d.get("downloaded_bytes", 0)
-            speed     = d.get("_speed_str", "").strip()
-            eta       = d.get("_eta_str", "").strip()
-            pct_chunk = (done / total * 100) if total else 0
-
-            # Fase 1 ocupa 0-80%, fase 2 (audio) ocupa 80-95%
-            if self._phase == 1:
-                pct = pct_chunk * 0.80
-            else:
-                pct = 80 + pct_chunk * 0.15
-
-            self.progress.emit(pct, f"Descargando... {pct_chunk:.1f}%  ·  {speed}  ·  ETA {eta}")
-
+            total = d.get("total_bytes") or d.get("total_bytes_estimate", 0)
+            done  = d.get("downloaded_bytes", 0)
+            spd   = d.get("_speed_str", "").strip()
+            eta   = d.get("_eta_str", "").strip()
+            chunk = (done / total * 100) if total else 0
+            pct   = chunk * 0.80 if self._phase == 1 else 80 + chunk * 0.15
+            self.progress.emit(pct, f"Descargando… {chunk:.1f}%  ·  {spd}  ·  ETA {eta}")
         elif d["status"] == "finished":
             self._phase = 2
-            self.progress.emit(95, "Mezclando pistas con ffmpeg…")
+            self.progress.emit(95, "Procesando archivo…")
 
     def run(self):
         try:
             outtmpl = os.path.join(self.out_dir, "%(title)s.%(ext)s")
             opts = {
-                "format":               self.fmt_string,
-                "outtmpl":              outtmpl,
-                "merge_output_format":  "mp4",
-                "progress_hooks":       [self._hook],
+                "format":              self.fmt,
+                "outtmpl":             outtmpl,
+                "merge_output_format": "mp4",
+                "progress_hooks":      [self._hook],
+                "extractor_args":      self.extractor_args,
             }
-            if self.fmt_string.startswith("bestaudio"):
+            if self.fmt.startswith("bestaudio"):
                 opts["postprocessors"] = [{
-                    "key":              "FFmpegExtractAudio",
-                    "preferredcodec":   "mp3",
-                    "preferredquality": "192",
+                    "key": "FFmpegExtractAudio",
+                    "preferredcodec": "mp3", "preferredquality": "192",
                 }]
                 opts.pop("merge_output_format", None)
             if self.ffmpeg_dir:
@@ -153,451 +199,406 @@ class DownloadWorker(QThread):
             self.finished.emit(self.out_dir)
         except Exception as e:
             msg = str(e)
-            short = msg.split("ERROR:")[-1].strip() if "ERROR:" in msg else msg
-            self.error.emit(short)
+            self.error.emit(msg.split("ERROR:")[-1].strip() if "ERROR:" in msg else msg)
 
 
-# ─── Componentes UI ───────────────────────────────────────────────────────────
+# ── Helpers de estilo ─────────────────────────────────────────────────────────
 
-def shadow(radius=18, color="#000000", opacity=120, offset=(0, 4)):
+def shadow(r=16, ofs=(0, 4), alpha=100):
     e = QGraphicsDropShadowEffect()
-    c = QColor(color)
-    c.setAlpha(opacity)
-    e.setColor(c)
-    e.setBlurRadius(radius)
-    e.setOffset(*offset)
+    c = QColor("#000000"); c.setAlpha(alpha)
+    e.setColor(c); e.setBlurRadius(r); e.setOffset(*ofs)
     return e
 
 
+def card_style(radius=14):
+    return f"""
+        background: {CARD};
+        border: 1px solid {BORDER};
+        border-radius: {radius}px;
+    """
+
+
+def input_style(accent):
+    return f"""
+        QLineEdit, QComboBox {{
+            background: {INPUT};
+            color: {TEXT};
+            border: 1.5px solid {BORDER};
+            border-radius: 8px;
+            padding: 9px 14px;
+            font-size: 13px;
+        }}
+        QLineEdit:focus, QComboBox:focus {{ border-color: {accent}; }}
+        QComboBox::drop-down {{ border: none; width: 28px; }}
+        QComboBox::down-arrow {{
+            border-left: 5px solid transparent;
+            border-right: 5px solid transparent;
+            border-top: 6px solid {MUTED};
+            margin-right: 10px;
+        }}
+        QComboBox QAbstractItemView {{
+            background: {CARD};
+            color: {TEXT};
+            selection-background-color: {accent};
+            border: 1px solid {BORDER};
+            border-radius: 8px;
+            padding: 4px;
+            outline: none;
+        }}
+    """
+
+
+# ── Componentes ───────────────────────────────────────────────────────────────
+
 class Card(QFrame):
-    def __init__(self, parent=None, radius=16):
+    def __init__(self, parent=None, radius=14):
         super().__init__(parent)
-        self.setStyleSheet(f"""
-            Card {{
-                background: {C['card']};
-                border: 1px solid {C['border']};
-                border-radius: {radius}px;
-            }}
-        """)
+        self.setStyleSheet(f"Card {{ {card_style(radius)} }}")
         self.setGraphicsEffect(shadow())
 
 
-class IconButton(QPushButton):
-    def __init__(self, text, color=None, parent=None):
-        super().__init__(text, parent)
-        bg = color or C["accent"]
-        self.setStyleSheet(f"""
-            QPushButton {{
-                background: {bg};
-                color: white;
-                border: none;
-                border-radius: 8px;
-                padding: 8px 18px;
-                font-weight: 700;
-                font-size: 13px;
-            }}
-            QPushButton:hover {{
-                background: {C['accent2']};
-            }}
-            QPushButton:disabled {{
-                background: {C['border']};
-                color: {C['muted']};
-            }}
-        """)
+class NavButton(QPushButton):
+    def __init__(self, icon, label, accent, parent=None):
+        super().__init__(parent)
+        self._icon   = icon
+        self._label  = label
+        self._accent = accent
+        self._active = False
+        self.setFixedHeight(48)
         self.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.setCheckable(True)
+        self._update_style()
+
+    def setActive(self, v):
+        self._active = v
+        self.setChecked(v)
+        self._update_style()
+
+    def _update_style(self):
+        if self._active:
+            self.setStyleSheet(f"""
+                QPushButton {{
+                    background: {self._accent}22;
+                    color: {self._accent};
+                    border: none;
+                    border-left: 3px solid {self._accent};
+                    border-radius: 0px;
+                    text-align: left;
+                    padding-left: 20px;
+                    font-size: 14px;
+                    font-weight: 700;
+                }}
+            """)
+        else:
+            self.setStyleSheet(f"""
+                QPushButton {{
+                    background: transparent;
+                    color: {MUTED};
+                    border: none;
+                    border-left: 3px solid transparent;
+                    border-radius: 0px;
+                    text-align: left;
+                    padding-left: 20px;
+                    font-size: 14px;
+                }}
+                QPushButton:hover {{
+                    background: {BORDER}44;
+                    color: {TEXT};
+                }}
+            """)
+        self.setText(f"  {self._icon}   {self._label}")
 
 
-class GhostButton(QPushButton):
+class GhostBtn(QPushButton):
     def __init__(self, text, parent=None):
         super().__init__(text, parent)
+        self.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.setStyleSheet(f"""
             QPushButton {{
                 background: transparent;
-                color: {C['muted']};
-                border: 1px solid {C['border']};
+                color: {MUTED};
+                border: 1px solid {BORDER};
                 border-radius: 8px;
-                padding: 8px 14px;
+                padding: 7px 14px;
                 font-size: 12px;
             }}
-            QPushButton:hover {{
-                background: {C['border']};
-                color: {C['text']};
-            }}
+            QPushButton:hover {{ background: {BORDER}; color: {TEXT}; }}
         """)
-        self.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
 
 
-# ─── Ventana principal ────────────────────────────────────────────────────────
+class SectionLabel(QLabel):
+    def __init__(self, text, parent=None):
+        super().__init__(text, parent)
+        self.setStyleSheet(f"color: {MUTED}; font-size: 10px; font-weight: 700; letter-spacing: 1px;")
 
-class MainWindow(QMainWindow):
-    FORMATS = [
-        ("Mejor calidad  (video + audio)",
-         "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best"),
-        ("1080p  (video + audio)",
-         "bestvideo[ext=mp4][height<=1080]+bestaudio[ext=m4a]/bestvideo[height<=1080]+bestaudio/best[height<=1080]"),
-        ("720p  (video + audio)",
-         "bestvideo[ext=mp4][height<=720]+bestaudio[ext=m4a]/bestvideo[height<=720]+bestaudio/best[height<=720]"),
-        ("480p  (video + audio)",
-         "bestvideo[ext=mp4][height<=480]+bestaudio[ext=m4a]/bestvideo[height<=480]+bestaudio/best[height<=480]"),
-        ("360p  (video + audio)",
-         "bestvideo[ext=mp4][height<=360]+bestaudio[ext=m4a]/bestvideo[height<=360]+bestaudio/best[height<=360]"),
-        ("Solo audio  (MP3 192 kbps)",
-         "bestaudio/best"),
-    ]
 
-    def __init__(self):
-        super().__init__()
-        self.setWindowTitle("Higgs Video Downloader")
-        self.setMinimumSize(820, 620)
-        self.resize(860, 660)
-        self._apply_theme()
-        self._build_ui()
+# ── Panel de plataforma ───────────────────────────────────────────────────────
 
-        self._info_worker    = None
-        self._dl_worker      = None
-        self._preview_timer  = QTimer(self)
+class PlatformPanel(QWidget):
+    def __init__(self, platform_key: str, parent=None):
+        super().__init__(parent)
+        self.pk      = platform_key
+        self.cfg     = PLATFORMS[platform_key]
+        self.accent  = ACCENT[platform_key]["primary"]
+        self.accent2 = ACCENT[platform_key]["secondary"]
+
+        self._info_worker = None
+        self._dl_worker   = None
+        self._dl_path     = default_video_dir()
+
+        self._preview_timer = QTimer(self)
         self._preview_timer.setSingleShot(True)
         self._preview_timer.timeout.connect(self._fetch_info)
-        self._download_path  = os.path.expanduser("~/Downloads")
 
-    # ── tema global ──────────────────────────────────────────────────────────
+        self._build()
 
-    def _apply_theme(self):
-        self.setStyleSheet(f"""
-            QMainWindow, QWidget {{ background: {C['bg']}; color: {C['text']}; }}
-            QScrollArea {{ border: none; background: transparent; }}
-            QScrollBar:vertical {{
-                background: {C['surface']}; width: 6px; border-radius: 3px;
-            }}
-            QScrollBar::handle:vertical {{
-                background: {C['border']}; border-radius: 3px;
-            }}
-        """)
+    # ── construcción ─────────────────────────────────────────────────────────
 
-    # ── construcción UI ───────────────────────────────────────────────────────
+    def _build(self):
+        root = QVBoxLayout(self)
+        root.setContentsMargins(24, 20, 24, 20)
+        root.setSpacing(14)
 
-    def _build_ui(self):
-        root = QWidget()
-        self.setCentralWidget(root)
-        main = QVBoxLayout(root)
-        main.setContentsMargins(24, 24, 24, 24)
-        main.setSpacing(16)
+        root.addWidget(self._make_header())
+        root.addWidget(self._make_url_bar())
 
-        main.addWidget(self._make_header())
-        main.addWidget(self._make_url_bar())
-
-        # Área central: preview izquierda + opciones derecha
         center = QHBoxLayout()
-        center.setSpacing(16)
-        center.addWidget(self._make_preview_panel(), 2)
-        center.addWidget(self._make_options_panel(), 3)
-        main.addLayout(center, 1)
+        center.setSpacing(14)
+        center.addWidget(self._make_preview_card(), 5)
+        center.addWidget(self._make_options_card(), 6)
+        root.addLayout(center, 1)
 
-        main.addWidget(self._make_progress_bar())
+        root.addWidget(self._make_progress_section())
 
     # ── header ────────────────────────────────────────────────────────────────
 
     def _make_header(self):
-        w = QWidget()
-        row = QHBoxLayout(w)
-        row.setContentsMargins(0, 0, 0, 0)
+        w = QWidget(); r = QHBoxLayout(w)
+        r.setContentsMargins(0, 0, 0, 0)
 
-        icon = QLabel("▶")
-        icon.setStyleSheet(f"color: {C['accent']}; font-size: 22px;")
+        ico = QLabel(self.cfg["icon"])
+        ico.setStyleSheet(f"color: {self.accent}; font-size: 20px;")
 
-        title = QLabel("Higgs  Video  Downloader")
-        title.setFont(QFont("Segoe UI", 18, QFont.Weight.Bold))
-        title.setStyleSheet(f"color: {C['text']};")
+        name = QLabel(self.cfg["label"])
+        name.setFont(QFont("Segoe UI", 15, QFont.Weight.Bold))
+        name.setStyleSheet(f"color: {TEXT};")
 
-        spacer = QWidget()
-        spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        spacer = QWidget(); spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
 
-        ffmpeg_ok = FFMPEG_DIR is not None
-        badge_text = "ffmpeg  ✓" if ffmpeg_ok else "ffmpeg  ✗"
-        badge_color = C["success"] if ffmpeg_ok else C["warning"]
-        badge = QLabel(badge_text)
+        ffok  = FFMPEG_DIR is not None
+        badge = QLabel("ffmpeg  ✓" if ffok else "ffmpeg  ✗")
         badge.setStyleSheet(f"""
-            background: transparent;
-            color: {badge_color};
-            border: 1px solid {badge_color};
-            border-radius: 6px;
-            padding: 3px 10px;
-            font-size: 11px;
-            font-weight: 600;
+            color: {SUCCESS if ffok else WARNING};
+            border: 1px solid {'#4caf5055' if ffok else '#ff980055'};
+            border-radius: 6px; padding: 3px 10px;
+            font-size: 10px; font-weight: 700;
         """)
 
-        author = QLabel("Jose Alexis Correa Valencia")
-        author.setStyleSheet(f"color: {C['muted']}; font-size: 11px;")
-
-        row.addWidget(icon)
-        row.addSpacing(8)
-        row.addWidget(title)
-        row.addWidget(spacer)
-        row.addWidget(badge)
-        row.addSpacing(14)
-        row.addWidget(author)
+        r.addWidget(ico); r.addSpacing(8); r.addWidget(name)
+        r.addWidget(spacer); r.addWidget(badge)
         return w
 
-    # ── barra URL ─────────────────────────────────────────────────────────────
+    # ── URL bar ───────────────────────────────────────────────────────────────
 
     def _make_url_bar(self):
-        card = Card(radius=12)
-        row = QHBoxLayout(card)
-        row.setContentsMargins(16, 12, 16, 12)
-        row.setSpacing(10)
+        card = QFrame()
+        card.setStyleSheet(f"QFrame {{ {card_style(12)} }}")
+        card.setGraphicsEffect(shadow(10, (0, 2), 80))
+
+        r = QHBoxLayout(card); r.setContentsMargins(14, 10, 14, 10); r.setSpacing(10)
 
         lbl = QLabel("URL")
-        lbl.setStyleSheet(f"color: {C['muted']}; font-weight: 700; font-size: 12px;")
-        lbl.setFixedWidth(28)
+        lbl.setStyleSheet(f"color: {MUTED}; font-size: 11px; font-weight: 700;")
+        lbl.setFixedWidth(26)
 
         self.url_input = QLineEdit()
-        self.url_input.setPlaceholderText("Pega aquí el enlace de YouTube…")
+        self.url_input.setPlaceholderText(self.cfg["hint"])
         self.url_input.setStyleSheet(f"""
             QLineEdit {{
-                background: {C['input_bg']};
-                color: {C['text']};
-                border: 1.5px solid {C['border']};
-                border-radius: 8px;
-                padding: 9px 14px;
-                font-size: 13px;
+                background: {INPUT}; color: {TEXT};
+                border: 1.5px solid {BORDER}; border-radius: 8px;
+                padding: 9px 14px; font-size: 13px;
             }}
-            QLineEdit:focus {{
-                border-color: {C['accent']};
-            }}
+            QLineEdit:focus {{ border-color: {self.accent}; }}
         """)
         self.url_input.textChanged.connect(self._on_url_changed)
 
-        self.clear_btn = GhostButton("✕")
-        self.clear_btn.setFixedSize(36, 36)
-        self.clear_btn.clicked.connect(self._clear_url)
+        clr = GhostBtn("✕"); clr.setFixedSize(34, 34)
+        clr.clicked.connect(self._clear_url)
 
-        self.preview_btn = IconButton("  Vista previa")
-        self.preview_btn.setFixedHeight(36)
-        self.preview_btn.clicked.connect(self._fetch_info)
+        prev_btn = QPushButton("  Vista previa")
+        prev_btn.setFixedHeight(34)
+        prev_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        prev_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: {self.accent}; color: white;
+                border: none; border-radius: 8px;
+                padding: 0 16px; font-size: 12px; font-weight: 700;
+            }}
+            QPushButton:hover {{ background: {self.accent2}; }}
+        """)
+        prev_btn.clicked.connect(self._fetch_info)
 
-        row.addWidget(lbl)
-        row.addWidget(self.url_input)
-        row.addWidget(self.clear_btn)
-        row.addWidget(self.preview_btn)
+        r.addWidget(lbl); r.addWidget(self.url_input)
+        r.addWidget(clr); r.addWidget(prev_btn)
         return card
 
-    # ── panel preview ─────────────────────────────────────────────────────────
+    # ── preview card ──────────────────────────────────────────────────────────
 
-    def _make_preview_panel(self):
-        card = Card(radius=16)
-        vbox = QVBoxLayout(card)
-        vbox.setContentsMargins(16, 16, 16, 16)
-        vbox.setSpacing(12)
+    def _make_preview_card(self):
+        card = Card(radius=14)
+        v = QVBoxLayout(card); v.setContentsMargins(16, 16, 16, 16); v.setSpacing(10)
 
-        # Miniatura
-        self.thumb_label = QLabel()
-        self.thumb_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.thumb_label.setFixedHeight(180)
-        self.thumb_label.setStyleSheet(f"""
-            background: {C['surface']};
-            border-radius: 10px;
-            color: {C['muted']};
-            font-size: 28px;
+        self.thumb = QLabel()
+        self.thumb.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.thumb.setFixedHeight(170)
+        self.thumb.setStyleSheet(f"""
+            background: {SURFACE}; border-radius: 10px;
+            color: {MUTED}; font-size: 30px;
         """)
-        self.thumb_label.setText("🎬")
+        self.thumb.setText(self.cfg["icon"])
 
-        # Info
-        self.title_label = QLabel("Sin video")
-        self.title_label.setFont(QFont("Segoe UI", 12, QFont.Weight.Bold))
-        self.title_label.setStyleSheet(f"color: {C['text']};")
-        self.title_label.setWordWrap(True)
-        self.title_label.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        self.meta_title = QLabel("Sin video")
+        self.meta_title.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
+        self.meta_title.setStyleSheet(f"color: {TEXT};")
+        self.meta_title.setWordWrap(True)
 
-        self.channel_label = self._meta_label("Canal", "—")
-        self.duration_label = self._meta_label("Duración", "—")
-        self.views_label = self._meta_label("Vistas", "—")
+        self.meta_channel  = self._meta("Autor / Canal", "—")
+        self.meta_duration = self._meta("Duración", "—")
+        self.meta_views    = self._meta("Vistas", "—")
+        self.meta_likes    = self._meta("Likes", "—")
 
-        # Spinner / estado
         self.preview_status = QLabel("")
-        self.preview_status.setStyleSheet(f"color: {C['muted']}; font-size: 11px;")
+        self.preview_status.setStyleSheet(f"color: {MUTED}; font-size: 10px;")
         self.preview_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        vbox.addWidget(self.thumb_label)
-        vbox.addWidget(self.title_label)
-        vbox.addWidget(self.channel_label)
-        vbox.addWidget(self.duration_label)
-        vbox.addWidget(self.views_label)
-        vbox.addStretch()
-        vbox.addWidget(self.preview_status)
+        v.addWidget(self.thumb)
+        v.addWidget(self.meta_title)
+        v.addWidget(self.meta_channel)
+        v.addWidget(self.meta_duration)
+        v.addWidget(self.meta_views)
+        v.addWidget(self.meta_likes)
+        v.addStretch()
+        v.addWidget(self.preview_status)
         return card
 
-    def _meta_label(self, key, val):
-        w = QLabel(f"<span style='color:{C['muted']};font-size:11px;'>{key}:</span>"
-                   f"  <span style='color:{C['text']};font-size:12px;'>{val}</span>")
+    def _meta(self, key, val):
+        w = QLabel()
         w.setTextFormat(Qt.TextFormat.RichText)
         w.setWordWrap(True)
+        self._set_meta(w, key, val)
         return w
 
-    def _update_meta(self, key_widget, key, val):
-        key_widget.setText(
-            f"<span style='color:{C['muted']};font-size:11px;'>{key}:</span>"
-            f"  <span style='color:{C['text']};font-size:12px;'>{val}</span>"
+    def _set_meta(self, widget, key, val):
+        widget.setText(
+            f"<span style='color:{MUTED};font-size:10px;'>{key}</span>"
+            f"<br><span style='color:{TEXT};font-size:12px;'>{val}</span>"
         )
 
-    # ── panel opciones ────────────────────────────────────────────────────────
+    # ── options card ──────────────────────────────────────────────────────────
 
-    def _make_options_panel(self):
-        card = Card(radius=16)
-        vbox = QVBoxLayout(card)
-        vbox.setContentsMargins(20, 20, 20, 20)
-        vbox.setSpacing(14)
+    def _make_options_card(self):
+        card = Card(radius=14)
+        v = QVBoxLayout(card); v.setContentsMargins(20, 20, 20, 20); v.setSpacing(10)
 
-        # Formato
-        vbox.addWidget(self._section_label("Formato de descarga"))
+        v.addWidget(SectionLabel("FORMATO"))
         self.fmt_combo = QComboBox()
-        self.fmt_combo.addItems([f[0] for f in self.FORMATS])
-        self.fmt_combo.setStyleSheet(f"""
-            QComboBox {{
-                background: {C['input_bg']};
-                color: {C['text']};
-                border: 1.5px solid {C['border']};
-                border-radius: 8px;
-                padding: 9px 14px;
-                font-size: 13px;
-            }}
-            QComboBox:focus {{ border-color: {C['accent']}; }}
-            QComboBox::drop-down {{ border: none; width: 30px; }}
-            QComboBox::down-arrow {{
-                image: none;
-                border-left: 5px solid transparent;
-                border-right: 5px solid transparent;
-                border-top: 6px solid {C['muted']};
-                margin-right: 10px;
-            }}
-            QComboBox QAbstractItemView {{
-                background: {C['card']};
-                color: {C['text']};
-                selection-background-color: {C['accent']};
-                border: 1px solid {C['border']};
-                border-radius: 8px;
-                padding: 4px;
-            }}
-        """)
+        self.fmt_combo.addItems([f[0] for f in self.cfg["formats"]])
+        self.fmt_combo.setStyleSheet(input_style(self.accent))
+        v.addWidget(self.fmt_combo)
 
-        # Carpeta destino
-        vbox.addWidget(self._section_label("Carpeta de destino"))
-        dest_row = QHBoxLayout()
-        dest_row.setSpacing(8)
-        self.dest_label = QLabel(os.path.expanduser("~/Downloads"))
-        self.dest_label.setStyleSheet(f"""
-            background: {C['input_bg']};
-            color: {C['text']};
-            border: 1.5px solid {C['border']};
-            border-radius: 8px;
-            padding: 9px 14px;
-            font-size: 12px;
+        v.addSpacing(6)
+        v.addWidget(SectionLabel("CARPETA DE DESTINO"))
+        row = QHBoxLayout(); row.setSpacing(8)
+        self.dest_lbl = QLabel(self._short(self._dl_path))
+        self.dest_lbl.setStyleSheet(f"""
+            background: {INPUT}; color: {TEXT};
+            border: 1.5px solid {BORDER}; border-radius: 8px;
+            padding: 9px 14px; font-size: 11px;
         """)
-        self.dest_label.setWordWrap(False)
-        self.dest_label.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
-        )
-        browse_btn = GhostButton("Examinar")
-        browse_btn.setFixedHeight(38)
-        browse_btn.clicked.connect(self._browse)
-        dest_row.addWidget(self.dest_label)
-        dest_row.addWidget(browse_btn)
+        self.dest_lbl.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        browse = GhostBtn("Examinar"); browse.setFixedHeight(38)
+        browse.clicked.connect(self._browse)
+        row.addWidget(self.dest_lbl); row.addWidget(browse)
+        v.addLayout(row)
 
-        # Botón descargar
+        v.addStretch()
+
         self.dl_btn = QPushButton("⬇   Descargar")
         self.dl_btn.setFixedHeight(52)
-        self.dl_btn.setFont(QFont("Segoe UI", 14, QFont.Weight.Bold))
+        self.dl_btn.setFont(QFont("Segoe UI", 13, QFont.Weight.Bold))
         self.dl_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.dl_btn.setStyleSheet(f"""
             QPushButton {{
                 background: qlineargradient(x1:0,y1:0,x2:1,y2:0,
-                    stop:0 {C['accent']}, stop:1 #c0392b);
-                color: white;
-                border: none;
-                border-radius: 12px;
+                    stop:0 {self.accent}, stop:1 {self.accent2});
+                color: white; border: none; border-radius: 12px;
             }}
             QPushButton:hover {{
                 background: qlineargradient(x1:0,y1:0,x2:1,y2:0,
-                    stop:0 {C['accent2']}, stop:1 {C['accent']});
+                    stop:0 {self.accent2}, stop:1 {self.accent});
             }}
             QPushButton:disabled {{
-                background: {C['border']};
-                color: {C['muted']};
+                background: {BORDER}; color: {MUTED};
             }}
         """)
         self.dl_btn.clicked.connect(self._start_download)
+        v.addWidget(self.dl_btn)
 
-        # Info extra
-        self.dl_info = QLabel("")
-        self.dl_info.setStyleSheet(f"color: {C['muted']}; font-size: 11px;")
-        self.dl_info.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.dl_info.setWordWrap(True)
-
-        vbox.addWidget(self.fmt_combo)
-        vbox.addSpacing(4)
-        vbox.addWidget(self._section_label("Carpeta de destino"))
-        vbox.addLayout(dest_row)
-        vbox.addStretch()
-        vbox.addWidget(self.dl_btn)
-        vbox.addWidget(self.dl_info)
+        self.dl_note = QLabel("")
+        self.dl_note.setStyleSheet(f"color: {MUTED}; font-size: 10px;")
+        self.dl_note.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        v.addWidget(self.dl_note)
         return card
 
-    def _section_label(self, text):
-        lbl = QLabel(text)
-        lbl.setStyleSheet(f"color: {C['muted']}; font-size: 11px; font-weight: 700;")
-        return lbl
+    # ── progress section ──────────────────────────────────────────────────────
 
-    # ── barra de progreso ─────────────────────────────────────────────────────
-
-    def _make_progress_bar(self):
+    def _make_progress_section(self):
         w = QWidget()
-        vbox = QVBoxLayout(w)
-        vbox.setContentsMargins(0, 0, 0, 0)
-        vbox.setSpacing(6)
+        v = QVBoxLayout(w); v.setContentsMargins(0, 0, 0, 0); v.setSpacing(5)
 
         self.progress = QProgressBar()
-        self.progress.setFixedHeight(8)
+        self.progress.setFixedHeight(7)
         self.progress.setTextVisible(False)
         self.progress.setValue(0)
         self.progress.setStyleSheet(f"""
-            QProgressBar {{
-                background: {C['surface']};
-                border-radius: 4px;
-                border: none;
-            }}
+            QProgressBar {{ background: {SURFACE}; border-radius: 3px; border: none; }}
             QProgressBar::chunk {{
                 background: qlineargradient(x1:0,y1:0,x2:1,y2:0,
-                    stop:0 {C['accent']}, stop:1 #ff6b35);
-                border-radius: 4px;
+                    stop:0 {self.accent}, stop:1 {self.accent2});
+                border-radius: 3px;
             }}
         """)
 
-        self.status_lbl = QLabel("Listo para descargar")
-        self.status_lbl.setStyleSheet(f"color: {C['muted']}; font-size: 11px;")
+        self.status_lbl = QLabel("Listo")
+        self.status_lbl.setStyleSheet(f"color: {MUTED}; font-size: 10px;")
 
-        vbox.addWidget(self.progress)
-        vbox.addWidget(self.status_lbl)
+        v.addWidget(self.progress)
+        v.addWidget(self.status_lbl)
         return w
 
-    # ── lógica URL / preview ──────────────────────────────────────────────────
+    # ── lógica preview ────────────────────────────────────────────────────────
 
     def _on_url_changed(self, text):
-        text = text.strip()
-        if "youtube.com" in text or "youtu.be" in text:
-            self._preview_timer.start(900)   # espera 900ms tras dejar de escribir
+        if any(d in text for d in ("youtube.com", "youtu.be", "tiktok.com", "vm.tiktok")):
+            self._preview_timer.start(900)
         else:
             self._reset_preview()
 
     def _clear_url(self):
         self.url_input.clear()
         self._reset_preview()
+        self._set_status("Listo", MUTED)
 
     def _reset_preview(self):
-        self.thumb_label.setText("🎬")
-        self.thumb_label.setPixmap(QPixmap())
-        self.title_label.setText("Sin video")
-        self._update_meta(self.channel_label,  "Canal",    "—")
-        self._update_meta(self.duration_label, "Duración", "—")
-        self._update_meta(self.views_label,    "Vistas",   "—")
+        self.thumb.setPixmap(QPixmap())
+        self.thumb.setText(self.cfg["icon"])
+        self.meta_title.setText("Sin video")
+        self._set_meta(self.meta_channel,  "Autor / Canal", "—")
+        self._set_meta(self.meta_duration, "Duración",      "—")
+        self._set_meta(self.meta_views,    "Vistas",        "—")
+        self._set_meta(self.meta_likes,    "Likes",         "—")
         self.preview_status.setText("")
 
     def _fetch_info(self):
@@ -607,134 +608,242 @@ class MainWindow(QMainWindow):
         if self._info_worker and self._info_worker.isRunning():
             return
 
+        self.preview_status.setStyleSheet(f"color: {MUTED}; font-size: 10px;")
         self.preview_status.setText("Cargando información…")
-        self.title_label.setText("…")
-        self._update_meta(self.channel_label,  "Canal",    "—")
-        self._update_meta(self.duration_label, "Duración", "—")
-        self._update_meta(self.views_label,    "Vistas",   "—")
-        self.thumb_label.setText("⏳")
+        self.thumb.setText("⏳")
+        self.meta_title.setText("…")
 
-        self._info_worker = InfoWorker(url)
+        self._info_worker = InfoWorker(url, self.cfg["extractor_args"])
         self._info_worker.ready.connect(self._on_info_ready)
         self._info_worker.failed.connect(self._on_info_failed)
         self._info_worker.start()
 
     def _on_info_ready(self, info):
-        self.title_label.setText(info["title"])
+        self.meta_title.setText(info["title"])
+        self._set_meta(self.meta_channel, "Autor / Canal", info["channel"])
 
-        self._update_meta(self.channel_label, "Canal", info["channel"])
-
-        secs = info["duration"] or 0
-        dur  = f"{secs//3600}h {(secs%3600)//60}m {secs%60}s" if secs >= 3600 \
-               else f"{secs//60}:{secs%60:02d}"
-        self._update_meta(self.duration_label, "Duración", dur)
-
-        views = info["view_count"]
-        if views >= 1_000_000:
-            views_str = f"{views/1_000_000:.1f}M"
-        elif views >= 1_000:
-            views_str = f"{views/1_000:.1f}K"
+        secs = int(info["duration"])
+        if secs >= 3600:
+            dur = f"{secs//3600}h {(secs%3600)//60}m {secs%60:02d}s"
         else:
-            views_str = str(views)
-        self._update_meta(self.views_label, "Vistas", views_str)
+            dur = f"{secs//60}:{secs%60:02d}"
+        self._set_meta(self.meta_duration, "Duración", dur)
+
+        def fmt_num(n):
+            if n >= 1_000_000: return f"{n/1_000_000:.1f}M"
+            if n >= 1_000:     return f"{n/1_000:.1f}K"
+            return str(n)
+
+        self._set_meta(self.meta_views, "Vistas", fmt_num(info["view_count"]))
+        self._set_meta(self.meta_likes, "Likes",  fmt_num(info["like_count"]))
 
         if info["thumbnail"]:
             pix = QPixmap()
             pix.loadFromData(info["thumbnail"])
             pix = pix.scaled(
-                self.thumb_label.width(),
-                self.thumb_label.height(),
+                self.thumb.width(), self.thumb.height(),
                 Qt.AspectRatioMode.KeepAspectRatio,
                 Qt.TransformationMode.SmoothTransformation,
             )
-            self.thumb_label.setPixmap(pix)
-            self.thumb_label.setText("")
+            self.thumb.setPixmap(pix)
+            self.thumb.setText("")
         else:
-            self.thumb_label.setText("🎬")
+            self.thumb.setText(self.cfg["icon"])
 
+        self.preview_status.setStyleSheet(f"color: {SUCCESS}; font-size: 10px;")
         self.preview_status.setText("✓  Vista previa cargada")
-        self.preview_status.setStyleSheet(f"color: {C['success']}; font-size: 11px;")
 
     def _on_info_failed(self, err):
-        self.thumb_label.setText("✗")
-        self.preview_status.setText("No se pudo cargar el video")
-        self.preview_status.setStyleSheet(f"color: {C['accent']}; font-size: 11px;")
-        self.title_label.setText("Error al obtener información")
+        self.thumb.setText("✗")
+        self.meta_title.setText("No se pudo obtener el video")
+        self.preview_status.setStyleSheet(f"color: {ACCENT[self.pk]['primary']}; font-size: 10px;")
+        self.preview_status.setText("Error al cargar el video")
 
     # ── lógica descarga ───────────────────────────────────────────────────────
 
     def _browse(self):
-        folder = QFileDialog.getExistingDirectory(self, "Carpeta de destino", self._download_path)
-        if folder:
-            self._download_path = folder
-            short = folder if len(folder) < 45 else "…" + folder[-42:]
-            self.dest_label.setText(short)
+        f = QFileDialog.getExistingDirectory(self, "Carpeta de destino", self._dl_path)
+        if f:
+            self._dl_path = f
+            self.dest_lbl.setText(self._short(f))
 
     def _start_download(self):
         url = self.url_input.text().strip()
         if not url:
-            self.status_lbl.setText("⚠  Ingresa una URL primero.")
-            return
+            self._set_status("⚠  Ingresa una URL.", WARNING); return
         if self._dl_worker and self._dl_worker.isRunning():
             return
 
-        idx        = self.fmt_combo.currentIndex()
-        fmt_string = self.FORMATS[idx][1]
+        idx = self.fmt_combo.currentIndex()
+        fmt = self.cfg["formats"][idx][1]
 
-        if fmt_string.startswith("bestaudio") and not FFMPEG_DIR:
-            self.status_lbl.setText("✗  ffmpeg no encontrado — MP3 no disponible.")
-            return
+        if fmt.startswith("bestaudio") and not FFMPEG_DIR:
+            self._set_status("✗  ffmpeg no encontrado — MP3 no disponible.", WARNING); return
 
         self.dl_btn.setEnabled(False)
         self.progress.setValue(0)
-        self.status_lbl.setText("Iniciando descarga…")
-        self.dl_info.setText("")
+        self.dl_note.setText("")
+        self._set_status("Iniciando descarga…", MUTED)
 
-        self._dl_worker = DownloadWorker(url, fmt_string, self._download_path, FFMPEG_DIR)
-        self._dl_worker.progress.connect(self._on_progress)
+        self._dl_worker = DownloadWorker(
+            url, fmt, self._dl_path, FFMPEG_DIR, self.cfg["extractor_args"]
+        )
+        self._dl_worker.progress.connect(lambda p, t: (self.progress.setValue(int(p)), self._set_status(t, MUTED)))
         self._dl_worker.finished.connect(self._on_finished)
         self._dl_worker.error.connect(self._on_error)
         self._dl_worker.start()
 
-    def _on_progress(self, pct, text):
-        self.progress.setValue(int(pct))
-        self.status_lbl.setText(text)
-
     def _on_finished(self, folder):
         self.progress.setValue(100)
-        self.status_lbl.setStyleSheet(f"color: {C['success']}; font-size: 11px;")
-        self.status_lbl.setText(f"✓  Guardado en: {folder}")
-        self.dl_info.setText("Descarga completada con éxito")
+        self._set_status(f"✓  Guardado en: {folder}", SUCCESS)
+        self.dl_note.setText("Descarga completada")
         self.dl_btn.setEnabled(True)
 
     def _on_error(self, msg):
         self.progress.setValue(0)
-        self.status_lbl.setStyleSheet(f"color: {C['accent']}; font-size: 11px;")
-        self.status_lbl.setText(f"✗  {msg[:120]}")
+        self._set_status(f"✗  {msg[:140]}", ACCENT[self.pk]["primary"])
         self.dl_btn.setEnabled(True)
 
+    # ── utilidades ────────────────────────────────────────────────────────────
 
-# ─── Entry point ──────────────────────────────────────────────────────────────
+    def _set_status(self, text, color=MUTED):
+        self.status_lbl.setStyleSheet(f"color: {color}; font-size: 10px;")
+        self.status_lbl.setText(text)
+
+    @staticmethod
+    def _short(path, maxlen=50):
+        return path if len(path) <= maxlen else "…" + path[-(maxlen - 1):]
+
+
+# ── Sidebar ───────────────────────────────────────────────────────────────────
+
+class Sidebar(QWidget):
+    platform_changed = pyqtSignal(str)   # "youtube" | "tiktok"
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedWidth(210)
+        self.setStyleSheet(f"background: {SIDEBAR}; border-right: 1px solid {BORDER};")
+
+        v = QVBoxLayout(self)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(0)
+
+        # ── Logo ──────────────────────────────────────────────────────────────
+        logo_area = QWidget()
+        logo_area.setFixedHeight(80)
+        logo_area.setStyleSheet(f"background: {BG};")
+        la = QVBoxLayout(logo_area)
+        la.setContentsMargins(20, 16, 20, 14)
+
+        app_name = QLabel("Higgs")
+        app_name.setFont(QFont("Segoe UI", 17, QFont.Weight.Bold))
+        app_name.setStyleSheet("color: #ececf4;")
+
+        sub = QLabel("Video Downloader")
+        sub.setStyleSheet(f"color: {MUTED}; font-size: 10px; font-weight: 600; letter-spacing: 1px;")
+
+        la.addWidget(app_name)
+        la.addWidget(sub)
+        v.addWidget(logo_area)
+
+        # ── Separador ─────────────────────────────────────────────────────────
+        sep_lbl = QLabel("PLATAFORMAS")
+        sep_lbl.setStyleSheet(f"""
+            color: {MUTED}; font-size: 9px; font-weight: 700;
+            letter-spacing: 1.5px; padding: 14px 20px 6px 20px;
+        """)
+        v.addWidget(sep_lbl)
+
+        # ── Botones de navegación ─────────────────────────────────────────────
+        self._btns = {}
+        for key in ("youtube", "tiktok"):
+            cfg = PLATFORMS[key]
+            btn = NavButton(cfg["icon"], cfg["label"], ACCENT[key]["primary"])
+            btn.clicked.connect(lambda _, k=key: self._select(k))
+            self._btns[key] = btn
+            v.addWidget(btn)
+
+        v.addStretch()
+
+        # ── Footer ────────────────────────────────────────────────────────────
+        footer = QWidget()
+        fl = QVBoxLayout(footer); fl.setContentsMargins(20, 10, 20, 16); fl.setSpacing(2)
+        author = QLabel("Jose Alexis Correa Valencia")
+        author.setStyleSheet(f"color: {MUTED}; font-size: 9px; font-weight: 600;")
+        author.setWordWrap(True)
+        version = QLabel("v3.0  ·  Freeware")
+        version.setStyleSheet(f"color: {BORDER}; font-size: 9px;")
+        fl.addWidget(author); fl.addWidget(version)
+        v.addWidget(footer)
+
+        self._select("youtube")
+
+    def _select(self, key):
+        for k, b in self._btns.items():
+            b.setActive(k == key)
+        self.platform_changed.emit(key)
+
+
+# ── Ventana principal ─────────────────────────────────────────────────────────
+
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Higgs Video Downloader")
+        self.setMinimumSize(880, 620)
+        self.resize(1020, 680)
+        self._apply_palette()
+        self._build()
+
+    def _apply_palette(self):
+        self.setStyleSheet(f"QMainWindow, QWidget {{ background: {BG}; color: {TEXT}; }}")
+        pal = QPalette()
+        for role, col in [
+            (QPalette.ColorRole.Window,        BG),
+            (QPalette.ColorRole.WindowText,    TEXT),
+            (QPalette.ColorRole.Base,          INPUT),
+            (QPalette.ColorRole.Text,          TEXT),
+            (QPalette.ColorRole.Button,        CARD),
+            (QPalette.ColorRole.ButtonText,    TEXT),
+            (QPalette.ColorRole.Highlight,     ACCENT["youtube"]["primary"]),
+            (QPalette.ColorRole.HighlightedText, "#ffffff"),
+        ]:
+            pal.setColor(role, QColor(col))
+        QApplication.instance().setPalette(pal)
+
+    def _build(self):
+        central = QWidget()
+        self.setCentralWidget(central)
+        row = QHBoxLayout(central)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(0)
+
+        self.sidebar = Sidebar()
+        self.stack   = QStackedWidget()
+        self.stack.setStyleSheet(f"background: {BG};")
+
+        self._panels = {}
+        for key in ("youtube", "tiktok"):
+            panel = PlatformPanel(key)
+            self._panels[key] = panel
+            self.stack.addWidget(panel)
+
+        self.sidebar.platform_changed.connect(self._switch)
+        self._switch("youtube")
+
+        row.addWidget(self.sidebar)
+        row.addWidget(self.stack, 1)
+
+    def _switch(self, key):
+        self.stack.setCurrentWidget(self._panels[key])
+
+
+# ── Entry point ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
-
-    # Paleta base oscura para los widgets nativos (menús, scrollbars, etc.)
-    pal = QPalette()
-    pal.setColor(QPalette.ColorRole.Window,          QColor(C["bg"]))
-    pal.setColor(QPalette.ColorRole.WindowText,      QColor(C["text"]))
-    pal.setColor(QPalette.ColorRole.Base,            QColor(C["input_bg"]))
-    pal.setColor(QPalette.ColorRole.AlternateBase,   QColor(C["surface"]))
-    pal.setColor(QPalette.ColorRole.ToolTipBase,     QColor(C["card"]))
-    pal.setColor(QPalette.ColorRole.ToolTipText,     QColor(C["text"]))
-    pal.setColor(QPalette.ColorRole.Text,            QColor(C["text"]))
-    pal.setColor(QPalette.ColorRole.Button,          QColor(C["card"]))
-    pal.setColor(QPalette.ColorRole.ButtonText,      QColor(C["text"]))
-    pal.setColor(QPalette.ColorRole.Highlight,       QColor(C["accent"]))
-    pal.setColor(QPalette.ColorRole.HighlightedText, QColor("#ffffff"))
-    app.setPalette(pal)
-
     win = MainWindow()
     win.show()
     sys.exit(app.exec())
