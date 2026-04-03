@@ -192,7 +192,9 @@ class YoutubeDownloader:
         fmt = self.format_var.get()
         out_template = os.path.join(self.download_path.get(), "%(title)s.%(ext)s")
 
-        base = {"progress_hooks": [self._progress_hook]}
+        base = {
+            "progress_hooks": [self._progress_hook],
+        }
         if FFMPEG_DIR:
             base["ffmpeg_location"] = FFMPEG_DIR
 
@@ -272,12 +274,19 @@ class YoutubeDownloader:
                 color="#4caf50",
             )
         except RuntimeError as e:
-            messagebox.showerror("ffmpeg no encontrado", str(e))
+            msg = str(e)
+            self.root.after(0, lambda: messagebox.showerror("ffmpeg no encontrado", msg))
             self._set_status("Error: ffmpeg requerido", color="#e94560")
         except yt_dlp.utils.DownloadError as e:
-            self._set_status(f"Error: {e}", color="#e94560")
+            # Extraer mensaje limpio sin el prefijo verbose de yt-dlp
+            msg = str(e)
+            short = msg.split("ERROR:")[-1].strip() if "ERROR:" in msg else msg
+            self._set_status(f"Error: {short}", color="#e94560")
+            self.root.after(0, lambda: messagebox.showerror("Error de descarga", short))
         except Exception as e:
-            self._set_status(f"Error inesperado: {e}", color="#e94560")
+            msg = str(e)
+            self._set_status(f"Error inesperado: {msg}", color="#e94560")
+            self.root.after(0, lambda: messagebox.showerror("Error inesperado", msg))
         finally:
             self.is_downloading = False
             self.root.after(0, lambda: self.download_btn.configure(
