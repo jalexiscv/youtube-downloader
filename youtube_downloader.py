@@ -247,7 +247,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("YouTube Downloader")
+        self.setWindowTitle("Higgs Video Downloader")
         self.setMinimumSize(820, 620)
         self.resize(860, 660)
         self._apply_theme()
@@ -305,7 +305,7 @@ class MainWindow(QMainWindow):
         icon = QLabel("▶")
         icon.setStyleSheet(f"color: {C['accent']}; font-size: 22px;")
 
-        title = QLabel("YouTube  Downloader")
+        title = QLabel("Higgs  Video  Downloader")
         title.setFont(QFont("Segoe UI", 18, QFont.Weight.Bold))
         title.setStyleSheet(f"color: {C['text']};")
 
