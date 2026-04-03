@@ -215,16 +215,34 @@ class YoutubeDownloader:
                 }],
             }
 
+        # Priorizar mp4+m4a (H.264+AAC): se mezclan en MP4 sin transcodificación.
+        # Fallback 1: cualquier video+audio separados (ffmpeg los mezcla).
+        # Fallback 2: mejor stream pre-mezclado disponible.
         format_map = {
-            "Mejor calidad (video+audio)": "bestvideo+bestaudio/best",
-            "1080p (video+audio)": "bestvideo[height<=1080]+bestaudio/best[height<=1080]",
-            "720p (video+audio)":  "bestvideo[height<=720]+bestaudio/best[height<=720]",
-            "480p (video+audio)":  "bestvideo[height<=480]+bestaudio/best[height<=480]",
-            "360p (video+audio)":  "bestvideo[height<=360]+bestaudio/best[height<=360]",
+            "Mejor calidad (video+audio)": (
+                "bestvideo[ext=mp4]+bestaudio[ext=m4a]"
+                "/bestvideo+bestaudio/best"
+            ),
+            "1080p (video+audio)": (
+                "bestvideo[ext=mp4][height<=1080]+bestaudio[ext=m4a]"
+                "/bestvideo[height<=1080]+bestaudio/best[height<=1080]"
+            ),
+            "720p (video+audio)": (
+                "bestvideo[ext=mp4][height<=720]+bestaudio[ext=m4a]"
+                "/bestvideo[height<=720]+bestaudio/best[height<=720]"
+            ),
+            "480p (video+audio)": (
+                "bestvideo[ext=mp4][height<=480]+bestaudio[ext=m4a]"
+                "/bestvideo[height<=480]+bestaudio/best[height<=480]"
+            ),
+            "360p (video+audio)": (
+                "bestvideo[ext=mp4][height<=360]+bestaudio[ext=m4a]"
+                "/bestvideo[height<=360]+bestaudio/best[height<=360]"
+            ),
         }
         return {
             **base,
-            "format": format_map.get(fmt, "bestvideo+bestaudio/best"),
+            "format": format_map.get(fmt, "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best"),
             "outtmpl": out_template,
             "merge_output_format": "mp4",
         }
