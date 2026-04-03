@@ -151,12 +151,16 @@ class DownloadWorker(QThread):
     finished = pyqtSignal(str)
     error    = pyqtSignal(str)
 
-    def __init__(self, url, fmt, out_dir, ffmpeg_dir, extractor_args=None):
+    # Códigos cortos por plataforma
+    CODES = {"youtube": "yt", "tiktok": "tt"}
+
+    def __init__(self, url, fmt, out_dir, ffmpeg_dir, platform_key, extractor_args=None):
         super().__init__()
         self.url            = url
         self.fmt            = fmt
         self.out_dir        = out_dir
         self.ffmpeg_dir     = ffmpeg_dir
+        self.platform_code  = self.CODES.get(platform_key, platform_key)
         self.extractor_args = extractor_args or {}
         self._phase         = 1
 
@@ -175,7 +179,18 @@ class DownloadWorker(QThread):
 
     def run(self):
         try:
-            outtmpl = os.path.join(self.out_dir, "%(title)s.%(ext)s")
+            is_audio = self.fmt.startswith("bestaudio")
+            # Nombre: {código}-{resolución}-{título}.{ext}
+            # %(height|best)s  → "1080", "720", … o "best" si no hay altura
+            # Para audio usamos "mp3" como resolución fija
+            if is_audio:
+                res_part = "mp3"
+            else:
+                res_part = "%(height|best)sp"
+
+            filename = f"{self.platform_code}-{res_part}-%(title)s.%(ext)s"
+            outtmpl  = os.path.join(self.out_dir, filename)
+
             opts = {
                 "format":              self.fmt,
                 "outtmpl":             outtmpl,
@@ -183,7 +198,7 @@ class DownloadWorker(QThread):
                 "progress_hooks":      [self._hook],
                 "extractor_args":      self.extractor_args,
             }
-            if self.fmt.startswith("bestaudio"):
+            if is_audio:
                 opts["postprocessors"] = [{
                     "key": "FFmpegExtractAudio",
                     "preferredcodec": "mp3", "preferredquality": "192",
@@ -686,7 +701,7 @@ class PlatformPanel(QWidget):
         self._set_status("Iniciando descarga…", MUTED)
 
         self._dl_worker = DownloadWorker(
-            url, fmt, self._dl_path, FFMPEG_DIR, self.cfg["extractor_args"]
+            url, fmt, self._dl_path, FFMPEG_DIR, self.pk, self.cfg["extractor_args"]
         )
         self._dl_worker.progress.connect(lambda p, t: (self.progress.setValue(int(p)), self._set_status(t, MUTED)))
         self._dl_worker.finished.connect(self._on_finished)
